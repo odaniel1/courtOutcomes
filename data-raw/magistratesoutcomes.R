@@ -1,7 +1,6 @@
 library(data.table)
-library(tidyverse)
-library(janitor)
-library(usethis)
+library(dtplyr)
+library(tidyverse, warn.conflicts = FALSE)
 
 # The csv we want to access is a single file within a zipped file hosted on gov.uk
 url_path <- "https://assets.publishing.service.gov.uk/government/uploads/system/uploads/attachment_data/file/804669/Data-behind-interactive-tools-csv.zip"
@@ -19,16 +18,50 @@ download.file(url_path, temp)
 system(unzip_command)
 
 # Having read in the csv file, we can delete the temporary files.
-magistratesoutcomes <- fread(paste(temp_csv, csv_within_zip, sep = "/"))
+magoutcomes <- fread(paste(temp_csv, csv_within_zip, sep = "/"), stringsAsFactors = TRUE)
 unlink(temp)
 unlink(temp_csv, recursive = TRUE)
+rm(temp, temp_csv, unzip_command, csv_within_zip, url_path)
 
 # Clean names for ease of use with R, and reduce to data of interest.
-magistratesoutcomes <-
-  magistratesoutcomes %>%
+magoutcomes <-
+  magoutcomes %>%
   as_tibble() %>%
-  clean_names() %>%
+  janitor::clean_names() %>%
   filter(year_of_appearance == 2018)
 
+# Add region and country to data based on force_code
+forceregions <- fread("./data-raw/forceregions.csv")
+magoutcomes <- left_join(magoutcomes, forceregions)
+
+# A function to generate a date from a year/quarter pair; the date returned
+# is the last day of the supplied quarter.
+date_from_year_quarter <- function(year, quarter){
+  quarter <- str_remove(quarter, "Q") %>% as.numeric()
+  month   <- 1 + 3 * (quarter - 1)
+  date    <- paste0(year, "-", month, "-01") %>% as.Date(format = "%Y-%m-%d")
+  date    <- lubridate::ceiling_date(date, unit = "quarter") -1
+  date
+}
+
+# Add date for end of quarter.
+magoutcomes <-
+  magoutcomes %>%
+  mutate(
+    appearance_period = date_from_year_quarter(year_of_appearance, quarter)
+  )
+
+# Treat all character variables as factors.
+magoutcomes <-
+  magoutcomes %>%
+  mutate_if(is.character, as.factor)
+
+# Reorder variables
+magoutcomes <-
+  magoutcomes %>%
+  select(appearance_period, year_of_appearance, quarter, country, region, force_code, everything())
+
+magoutcomes <- magoutcomes %>% select(-appearance_quarter_end)
+
 # Save as an rds file so that the data is available to the package.
-use_data(magistratesoutcomes, overwrite = TRUE, compress = 'xz')
+usethis::use_data(magoutcomes, overwrite = TRUE, compress = 'xz')
